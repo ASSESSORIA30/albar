@@ -1,0 +1,227 @@
+@import "tailwindcss";
+
+@theme {
+  --color-cal: #f7f5f0;
+  --color-paper: #fbfaf7;
+  --color-piedra: #ebe6dc;
+  --color-piedra-deep: #ddd6c8;
+  --color-arena: #c9b48f;
+  --color-arena-deep: #8f7752;
+  --color-antracita: #2a2b28;
+  --color-grafito: #5b5a54;
+  --color-linea: #d9d2c4;
+  --color-oliva: #5f6b4f;
+  --color-alerta: #9a4a2f;
+
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-newsreader), ui-serif, Georgia, serif;
+
+  --ease-arch: cubic-bezier(0.22, 0.61, 0.24, 1);
+
+  --breakpoint-xs: 26rem;
+}
+
+:root {
+  --plan-bg: #fbfaf7;
+  --plan-ink: #2a2b28;
+  --plan-circ: #f1ede5;
+  --header-h: 4rem;
+  color-scheme: light;
+}
+
+html {
+  background: var(--color-cal);
+  color: var(--color-antracita);
+  -webkit-text-size-adjust: 100%;
+  scroll-padding-top: calc(var(--header-h) + 1rem);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+body {
+  background: var(--color-cal);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "tnum" 0;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
+}
+
+::selection {
+  background: var(--color-arena);
+  color: var(--color-antracita);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-antracita);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+@layer components {
+  /* Titulares: Archivo expandido y ligero, el gesto tipográfico de la marca. */
+  .display {
+    font-family: var(--font-sans);
+    font-stretch: 118%;
+    font-weight: 300;
+    letter-spacing: -0.025em;
+    line-height: 0.98;
+  }
+  .heading {
+    font-family: var(--font-sans);
+    font-stretch: 112%;
+    font-weight: 350;
+    letter-spacing: -0.018em;
+    line-height: 1.08;
+  }
+  .lead {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    font-size: 1.1875rem;
+    line-height: 1.55;
+    color: var(--color-grafito);
+  }
+  .prose-serif {
+    font-family: var(--font-serif);
+    font-size: 1.0625rem;
+    line-height: 1.7;
+  }
+  .figure {
+    font-family: var(--font-sans);
+    font-stretch: 108%;
+    font-variant-numeric: tabular-nums lining-nums;
+    letter-spacing: -0.02em;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 3rem;
+    padding: 0 1.4rem;
+    border-radius: 999px;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    letter-spacing: 0.005em;
+    transition:
+      background-color 0.25s var(--ease-arch),
+      color 0.25s var(--ease-arch),
+      border-color 0.25s var(--ease-arch),
+      transform 0.25s var(--ease-arch);
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  .btn:active {
+    transform: scale(0.98);
+  }
+  .btn-primary {
+    background: var(--color-antracita);
+    color: var(--color-cal);
+  }
+  .btn-primary:hover {
+    background: #3b3c37;
+  }
+  .btn-secondary {
+    border: 1px solid color-mix(in srgb, var(--color-antracita) 35%, transparent);
+    color: var(--color-antracita);
+    background: transparent;
+  }
+  .btn-secondary:hover {
+    border-color: var(--color-antracita);
+    background: color-mix(in srgb, var(--color-antracita) 4%, transparent);
+  }
+  .btn-light {
+    background: var(--color-cal);
+    color: var(--color-antracita);
+  }
+  .btn-light:hover {
+    background: #fff;
+  }
+  .btn[disabled],
+  .btn[aria-disabled="true"] {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .link {
+    text-decoration: underline;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.22em;
+    text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+    transition: text-decoration-color 0.2s;
+  }
+  .link:hover {
+    text-decoration-color: currentColor;
+  }
+
+  .shell {
+    width: 100%;
+    max-width: 88rem;
+    margin-inline: auto;
+    padding-inline: 1.25rem;
+  }
+  @media (min-width: 48rem) {
+    .shell {
+      padding-inline: 2.5rem;
+    }
+  }
+
+  /* Hiladas de bloque de hormigón celular (62,5 × 25 cm) como textura de marca. */
+  .coursing {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='50' height='40' viewBox='0 0 50 40'%3E%3Cg fill='none' stroke='%232A2B28' stroke-opacity='0.09' stroke-width='1'%3E%3Cpath d='M0 .5H50M0 20.5H50M.5 0V20M25.5 20V40'/%3E%3C/g%3E%3C/svg%3E");
+    background-size: 50px 40px;
+  }
+
+  .field {
+    width: 100%;
+    min-height: 3.25rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--color-linea);
+    background: var(--color-paper);
+    padding: 0.85rem 1rem;
+    font-size: 1rem;
+    color: var(--color-antracita);
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .field::placeholder {
+    color: color-mix(in srgb, var(--color-grafito) 70%, transparent);
+  }
+  .field:focus {
+    outline: none;
+    border-color: var(--color-antracita);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-arena) 45%, transparent);
+  }
+  .field[aria-invalid="true"] {
+    border-color: var(--color-alerta);
+  }
+  select.field {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%232A2B28' stroke-width='1.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 1rem center;
+    padding-right: 2.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media print {
+  header,
+  footer,
+  [data-noprint] {
+    display: none !important;
+  }
+}
