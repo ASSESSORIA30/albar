@@ -1,10 +1,5 @@
-import type { MetadataRoute } from "next";
-import { site } from "@/content/site";
-
-export default function robots(): MetadataRoute.Robots {
-  return {
-    rules: [{ userAgent: "*", allow: "/", disallow: ["/api/", "/panel-datos", "/ca/panel-datos"] }],
-    sitemap: `${site.url}/sitemap.xml`,
-    host: site.url,
-  };
+import type { MetadataRoute } from 'next';
+export default function robots():MetadataRoute.Robots{
+ const url=(process.env.NEXT_PUBLIC_SITE_URL||'http://localhost:3000').replace(/\/$/,'');
+ return {rules:{userAgent:'*',allow:'/',disallow:['/api/','/editor','/aviso-legal','/privacidad','/cookies']},sitemap:`${url}/sitemap.xml`};
 }

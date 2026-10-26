@@ -1,178 +1,72 @@
-import { NextResponse, type NextRequest } from "next/server";
-import { leadSchema, type LeadInput, type LeadResponse } from "@/lib/lead";
-import { estimate } from "@/lib/pricing";
-import { getModel } from "@/content/models";
-import { site } from "@/content/site";
-import { pricing } from "@/content/pricing";
-import { euro } from "@/lib/format";
-
-export const runtime = "nodejs";
-
-/* ── Límite de envíos por IP (memoria del proceso). En Vercel es por instancia:
-      para un límite global, sustituir por Upstash/Redis o Vercel KV. ── */
-const WINDOW_MS = 10 * 60 * 1000;
-const MAX_PER_WINDOW = 5;
-const hits = new Map<string, number[]>();
-
-function rateLimited(ip: string) {
-  const now = Date.now();
-  const list = (hits.get(ip) ?? []).filter((t) => now - t < WINDOW_MS);
-  list.push(now);
-  hits.set(ip, list);
-  if (hits.size > 5000) hits.clear();
-  return list.length > MAX_PER_WINDOW;
+import { NextRequest, NextResponse } from 'next/server';
+import { leadSchema } from '@/lib/lead-schema';
+import { euro, quotePrice } from '@/lib/pricing';
+import { siteConfig, models } from '@/config/site';
+export const runtime='nodejs';
+const localLimits=new Map<string,{count:number;expires:number}>();
+const WINDOW=15*60*1000;const MAX=5;
+const clean = (v:string) => v.replace(/[&<>"']/g, (c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]||c));
+async function rateLimit(ip:string):Promise<boolean>{
+ const now=Date.now(); const url=process.env.UPSTASH_REDIS_REST_URL;const token=process.env.UPSTASH_REDIS_REST_TOKEN;
+ if(url&&token){
+   try{
+     const res=await fetch(`${url}/pipeline`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify([['INCR',`celar:rate:${ip}:${Math.floor(now/WINDOW)}`],['EXPIRE',`celar:rate:${ip}:${Math.floor(now/WINDOW)}`,900]]),cache:'no-store'});
+     if(!res.ok)return false;
+     const out=await res.json() as {result?:number}[];
+     return Number(out[0]?.result)<=MAX;
+   }catch{return false;}
+ }
+ // Fallback only per instance, deploy persistent rate limiting for production.
+ if(localLimits.size>5000)localLimits.clear();
+ const prior=localLimits.get(ip);
+ const next=!prior||prior.expires<now?{count:1,expires:now+WINDOW}:{count:prior.count+1,expires:prior.expires};
+ localLimits.set(ip,next);return next.count<=MAX;
 }
-
-function json(body: LeadResponse, status: number) {
-  return NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
-}
-
-async function verifyTurnstile(token: string | undefined, ip: string) {
-  const secret = process.env.TURNSTILE_SECRET_KEY;
-  if (!secret) return true; // no configurado: se usan honeypot + tiempo mínimo + límite por IP
-  if (!token) return false;
-  try {
-    const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ secret, response: token, remoteip: ip }),
-    });
-    const data = (await res.json()) as { success?: boolean };
-    return Boolean(data.success);
-  } catch {
-    return false;
-  }
-}
-
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-
-function buildSummary(lead: LeadInput, id: string) {
-  const model = getModel(lead.model);
-  const e = estimate(lead.surface, lead.mode);
-  const landText = { yes: "Sí", no: "No", searching: "Lo está buscando" }[lead.land];
-  const rows: [string, string][] = [
-    ["Referencia", id],
-    ["Nombre", lead.name],
-    ["Teléfono", lead.phone],
-    ["Email", lead.email],
-    ["Provincia", lead.province],
-    ["Modelo", model ? `${model.copy.es.name} (${model.budgetSurface} m² de catálogo)` : "Superficie personalizada"],
-    ["Superficie presupuestada", `${lead.surface} m²`],
-    ["Modalidad", lead.mode === "assembly" ? "Kit + montaje" : "Solo kit"],
-    ["Kit", euro(e.kit)],
-    ["Montaje", lead.mode === "assembly" ? euro(e.assembly) : "No seleccionado"],
-    ["Total orientativo sin impuestos", euro(e.subtotal)],
-    ["Terreno", landText],
-    ["Idioma", lead.lang],
-    ["Mensaje", lead.message || "—"],
-  ];
-  const text = rows.map(([k, v]) => `${k}: ${v}`).join("\n");
-  const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#2A2B28">
-<h2 style="font-weight:400">Nueva solicitud de presupuesto · ${esc(site.brand)}</h2>
-<table cellpadding="6" style="border-collapse:collapse">${rows
-    .map(([k, v]) => `<tr><td style="color:#5B5A54;vertical-align:top">${esc(k)}</td><td>${esc(v).replace(/\n/g, "<br>")}</td></tr>`)
-    .join("")}</table>
-<p style="color:#5B5A54;font-size:12px">Presupuesto orientativo calculado en servidor (${pricing.kitPerM2} €/m² kit, ${pricing.assemblyPerM2} €/m² montaje). Impuestos no incluidos.</p>
-</body></html>`;
-  return { text, html, estimate: e, model };
-}
-
-async function sendEmail(lead: LeadInput, summary: ReturnType<typeof buildSummary>) {
-  const key = process.env.RESEND_API_KEY;
-  const to = process.env.LEAD_EMAIL_TO;
-  const from = process.env.LEAD_EMAIL_FROM;
-  if (!key || !to || !from) return null; // no configurado
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      from,
-      to: to.split(",").map((s) => s.trim()).filter(Boolean),
-      reply_to: lead.email,
-      subject: `Solicitud de presupuesto: ${summary.model ? summary.model.copy.es.name : "superficie personalizada"}, ${lead.surface} m² (${lead.province})`,
-      text: summary.text,
-      html: summary.html,
-    }),
-  });
-  return res.ok;
-}
-
-async function sendCrm(lead: LeadInput, id: string, summary: ReturnType<typeof buildSummary>) {
-  const url = process.env.CRM_WEBHOOK_URL;
-  if (!url) return null;
-  const secret = process.env.CRM_WEBHOOK_SECRET;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...(secret ? { Authorization: `Bearer ${secret}` } : {}) },
-    body: JSON.stringify({
-      id,
-      createdAt: new Date().toISOString(),
-      source: "web",
-      contact: { name: lead.name, phone: lead.phone, email: lead.email, province: lead.province, language: lead.lang },
-      project: {
-        model: lead.model || null,
-        surfaceM2: lead.surface,
-        mode: lead.mode,
-        land: lead.land,
-        message: lead.message || null,
-      },
-      estimate: {
-        currency: pricing.currency,
-        kit: summary.estimate.kit,
-        assembly: summary.estimate.assembly,
-        subtotalExclTaxes: summary.estimate.subtotal,
-      },
-      consent: { privacy: true, at: new Date().toISOString() },
-    }),
-  });
-  return res.ok;
-}
-
-export async function POST(req: NextRequest) {
-  const ip = (req.headers.get("x-forwarded-for") || "").split(",")[0].trim() || "unknown";
-
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return json({ ok: false, error: "validation", fields: ["body"] }, 400);
-  }
-
-  const parsed = leadSchema.safeParse(body);
-  if (!parsed.success) {
-    const fields = [...new Set(parsed.error.issues.map((i) => String(i.path[0])))];
-    // Honeypot relleno o envío demasiado rápido: tratado como spam.
-    if (fields.includes("website")) return json({ ok: false, error: "spam" }, 403);
-    return json({ ok: false, error: "validation", fields }, 400);
-  }
-  const lead = parsed.data;
-
-  if (Date.now() - lead.startedAt < 3000) return json({ ok: false, error: "spam" }, 403);
-  if (rateLimited(ip)) return json({ ok: false, error: "rate_limited" }, 429);
-  if (!(await verifyTurnstile(lead.turnstileToken, ip))) return json({ ok: false, error: "spam" }, 403);
-
-  const emailConfigured = Boolean(process.env.RESEND_API_KEY && process.env.LEAD_EMAIL_TO && process.env.LEAD_EMAIL_FROM);
-  const crmConfigured = Boolean(process.env.CRM_WEBHOOK_URL);
-  if (!emailConfigured && !crmConfigured) {
-    // Nunca se confirma un envío que no se ha producido.
-    return json({ ok: false, error: "not_configured" }, 503);
-  }
-
-  const id = `${site.brand.slice(0, 3).toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
-  const summary = buildSummary(lead, id);
-
-  const [email, crm] = await Promise.allSettled([sendEmail(lead, summary), sendCrm(lead, id, summary)]);
-  const delivered: string[] = [];
-  if (email.status === "fulfilled" && email.value === true) delivered.push("email");
-  if (crm.status === "fulfilled" && crm.value === true) delivered.push("crm");
-
-  if (!delivered.length) {
-    console.error("[lead] fallo de entrega", { id, email, crm });
-    return json({ ok: false, error: "delivery_failed" }, 502);
-  }
-  return json({ ok: true, id, delivered }, 200);
-}
-
-export function GET() {
-  return json({ ok: false }, 405);
+export async function POST(req:NextRequest){
+ let body:unknown;
+ try{body=await req.json()}catch{return NextResponse.json({error:'Solicitud JSON no válida.'},{status:400})}
+ const parsed=leadSchema.safeParse(body);
+ if(!parsed.success)return NextResponse.json({error:'Revisa los datos del formulario.'},{status:400});
+ const lead=parsed.data;
+ if(lead.website)return NextResponse.json({error:'Solicitud no válida.'},{status:400});
+ const age=Date.now()-lead.startedAt;
+ if(age<2000||age>24*60*60*1000)return NextResponse.json({error:'Verifica el formulario y vuelve a intentarlo.'},{status:400});
+ const ip=req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()||'unknown';
+ if(!(await rateLimit(ip)))return NextResponse.json({error:'Demasiadas solicitudes. Vuelve a intentarlo más tarde.'},{status:429});
+ const turnstileSecret=process.env.TURNSTILE_SECRET_KEY;
+ if(turnstileSecret){
+   if(!lead.turnstileToken)return NextResponse.json({error:'Falta la verificación antispam.'},{status:400});
+   try{const verify=await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify',{method:'POST',body:new URLSearchParams({secret:turnstileSecret,response:lead.turnstileToken,remoteip:ip})});
+   const outcome=await verify.json() as {success?:boolean}; if(!verify.ok||!outcome.success)return NextResponse.json({error:'La verificación de seguridad no se ha completado.'},{status:400});
+   }catch{return NextResponse.json({error:'No se ha podido verificar la solicitud.'},{status:503})}
+ }
+ const {RESEND_API_KEY,LEADS_TO_EMAIL,FROM_EMAIL}=process.env;
+ if(!RESEND_API_KEY||!LEADS_TO_EMAIL||!FROM_EMAIL){
+   return NextResponse.json({error:'El envío de solicitudes aún no está activado. Falta configurar el correo de la empresa.'},{status:503});
+ }
+ const q=quotePrice(lead.area,lead.mode);
+ const house=models.find(m=>m.slug===lead.modelSlug);
+ const text=[
+   `Nueva solicitud desde ${siteConfig.brand.name}`,
+   `Nombre: ${lead.name}`,`Teléfono: ${lead.phone}`,`Email: ${lead.email}`,
+   `Provincia: ${lead.province}`,`Terreno: ${lead.hasLand}`,
+   `Modelo: ${house?house.name:'Personalizado'}`,`Superficie: ${lead.area} m²`,
+   `Modalidad: ${lead.mode==='kit'?'Solo kit':'Kit + montaje'}`,
+   `Kit: ${euro(q.kit)}`,`Montaje: ${lead.mode==='kit'?'No incluido':euro(q.assembly)}`,
+   `Total orientativo sin impuestos calculados: ${euro(q.total)}`,
+   `Mensaje: ${lead.message||'—'}`,
+   `Privacidad aceptada: Sí`,`Alcance sujeto a validación.`
+ ].join('\n');
+ try {
+   const send=await fetch('https://api.resend.com/emails',{
+     method:'POST',headers:{Authorization:`Bearer ${RESEND_API_KEY}`,'Content-Type':'application/json'},
+     body:JSON.stringify({from:FROM_EMAIL,to:[LEADS_TO_EMAIL],reply_to:lead.email,
+       subject:`Nueva solicitud ${siteConfig.brand.name} · ${clean(house?.name||'A medida')} · ${lead.area} m²`,text}),
+     cache:'no-store'
+   });
+   if(!send.ok){console.error('Email provider failed',send.status);return NextResponse.json({error:'El servidor de correo no ha aceptado la solicitud. Inténtalo más tarde.'},{status:502});}
+   const result=await send.json() as {id?:string};
+   if(!result.id)return NextResponse.json({error:'El servicio no confirmó el envío. Vuelve a intentarlo.'},{status:502});
+   return NextResponse.json({ok:true},{status:200});
+ }catch{return NextResponse.json({error:'No se pudo completar el envío. Vuelve a intentarlo.'},{status:502});}
 }
